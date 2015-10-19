@@ -48,13 +48,14 @@ df1$scientificName <- paste(df1$Genus, df1$Species, sep=" ")
 
 
 ```{r, reduce nrows to just dupes}
-#Set temp column in order to identify records with duplicate values in specific fields
+#Set temp column in order to identify records with duplicate values in specific field
 colsToValidate <- c('Individual_ID', 'Observation_Date', 'Phenophase_Name')
 
 #select only those row that have duplicate values
 df2<-df1[duplicated (df1[,colsToValidate]) | duplicated (df1[,colsToValidate], fromLast=TRUE),]
 
 # remove duplicates resulting from multiple observations recorded by only one person on a given day
+##### This needs to be updated based on the revised rem_dups function in ATBD library ####
 df2 <- rem_dups(df=df2, cols=c(colsToValidate, 'ObservedBy_Person_ID'), qfColName = 'dupByPerson')
 
 # remove phenophases for which no intensity is reported
@@ -108,7 +109,7 @@ out <- rem_dups(out, names(out))
 ```{r summary}
 
 
-## overall concurance of phenophase intensity for = 0.8769671
+## overall concurance of phenophase intensity = 0.8769671
 propConcur <- (sum(out$agree))/(nrow(out))
 propConcur
 
@@ -188,6 +189,7 @@ df3 <- filter(df3, !Intensity_Value=='NA')
 
 
 ##max(Intensity_Value)-min(Intensity_Value)
+###dropped this line of thinking
 
 #Set empty vectors to hold the values needed for the new dataframe
 dates <- vector()
@@ -242,6 +244,10 @@ outDist$intensityType[outDist$phenophaseName == "Increasing leaf size"] <- 'perc
 outDist$intensityType[outDist$phenophaseName == "Leaves"] <- 'percentage'
 outDist$intensityType[outDist$phenophaseName == "Open flowers"] <- 'percentage'
 
+```
+
+
+```{r summarize}
 
 
 propConcurDist <- (sum(outDist$dist))/(nrow(outDist))
