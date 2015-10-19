@@ -1,0 +1,237 @@
+---
+title: "Phenology KPI"
+author: "Katie Jones"
+date: "Thursday, June 04, 2015"
+output: word_document
+---
+
+```{r libraries}
+
+library(plyr)
+library(dplyr)
+library(atbdLibrary)
+library(xtable)
+
+```
+
+
+
+```{r readNPNdata}
+#set working directory
+setwd("~/R/phenology/NPNdata_20150715")
+
+
+allData <- read.csv('observation_data.csv', na.strings = "",
+                    stringsAsFactors=F)
+
+personData <- read.csv('person_data.csv', na.strings="",
+                    stringsAsFactors=F)
+
+```
+
+
+```{r manipulate dataset}
+# just relevant person data
+
+skill <- select(personData, Person_ID, Naturalist_Skill_Level)
+  #align field names between skill and allData
+skill <- rename(skill, ObservedBy_Person_ID = Person_ID)
+
+#now merge the two
+df2 <- join(allData, skill)
+
+#fill blank cells with 'NA'
+df2$Naturalist_Skill_Level[df2$Naturalist_Skill_Level==""] <- NA
+
+#filter rows where Naturalist_Skill_Level = NA
+df3 <- filter(df2, !Naturalist_Skill_Level=="NA")
+
+#create scientificName field
+df3$scientificName <- "na"
+df3$scientificName <- paste(df3$Genus, df3$Species, sep=" ")
+
+
+#select and organize columns of interest
+
+# use when working with 20150604 data
+#df3 <- filter(df3, Phenophase_Status==1) %>%
+#  select(Observation_Date, ObservedBy_Person_ID, Naturalist_Skill_Level, Individual_ID, scientificName, USDA_PLANTS_Symbol, Phenophase_Name, Phenophase_Status, Intensity_Value, Observed_Status_Conflict_Flag, Status_Conflict_Related_Records) 
+
+
+#use when working with 20150715 data
+df3 <- filter(df3, Phenophase_Status==1) %>%
+  select(Observation_Date, ObservedBy_Person_ID, Naturalist_Skill_Level, Individual_ID, scientificName, USDA_PLANTS_Symbol, Phenophase_Name, Phenophase_Status, Intensity_Value, Species_Functional_Type) 
+
+
+#remove old dfs
+rm(allData, df2, personData, skill)
+
+```
+
+
+```{r, reduce nrows to just dupes}
+#Set temp column in order to identify records with duplicate values in specific fields
+colsToValidate <- c('Individual_ID', 'Observation_Date', 'Phenophase_Name', 'Naturalist_Skill_Level')
+
+#select only those row that have duplicate values
+df4<-df3[duplicated (df3[,colsToValidate]) | duplicated (df3[,colsToValidate], fromLast=TRUE),]
+
+# remove duplicates resulting from multiple observations recorded by only one person on a given day
+df4 <- rem_dups(df=df4, cols=c(colsToValidate, 'ObservedBy_Person_ID'), qfColName = 'dupByPerson')
+
+# remove phenophases for which no intensity is reported
+df4 <- filter(df4, !Phenophase_Name=="Falling leaves", !Phenophase_Name=="Pollen release")
+
+df4$temp <- paste(df4$Observation_Date, df4$Individual_ID, df4$Phenophase_Name, 
+                  df4$Naturalist_Skill_Level, sep='_')
+
+df4$temp <- paste(df4$Observation_Date, df4$Individual_ID, df4$Phenophase_Name, 
+                  df4$Naturalist_Skill_Level, sep='_')
+
+#Set empty vectors to hold the values needed for the new dataframe
+dates <- vector()
+indIDs <- vector()
+pheNames <- vector()
+natLevels <- vector()
+agrees <- vector()
+numObs <- vector()
+funcType <- vector()
+intensity <- vector()
+
+#Subset data by unique values of temp
+for (i in 1:length(unique(df4$temp))){
+  sub <- df4[which(df4$Observation_Date==strsplit(df4$temp[i],'_')[[1]][1] &
+                     df4$Individual_ID==strsplit(df4$temp[i],'_')[[1]][2] & 
+                     df4$Phenophase_Name==strsplit(df4$temp[i],'_')[[1]][3] &
+                     df4$Naturalist_Skill_Level==strsplit(df4$temp[i],'_')[[1]][4]),]
+  
+
+  #If there is more than one row in the subset, calculate agree (0=no, 1=yes)
+  if(nrow(sub)>1){
+    agree <- ifelse(length(unique(sub$Intensity_Value))==1, 1, 0)
+    numObs <- c(numObs,nrow(sub))
+    dates <- c(dates,sub$Observation_Date[1])
+    indIDs <- c(indIDs,sub$Individual_ID[1])
+    pheNames <- c(pheNames,sub$Phenophase_Name[1])
+    natLevels <- c(natLevels,sub$Naturalist_Skill_Level[1])
+    funcType <- c(funcType, sub$Species_Functional_Type [1])
+    intensity <- c(intensity, sub$Intensity_Value)
+    agrees <- c(agrees,agree)
+  }
+}
+
+#Create output dataframe
+out <- data.frame(date=dates, individualID=indIDs, phenophaseName= pheNames,
+                  functionalType=funcType, skillLevel=natLevels,agree=agrees,
+                  numberObservers=numObs)
+
+```
+
+
+```{r summary}
+## overall concurance of phenophase intensity for = 0.8769671
+propConcur <- (sum(out$agree))/(nrow(out))
+propConcur
+
+#summerize by natualist skill level
+propSummary <- out %>% 
+  group_by(skillLevel) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummary
+
+#summerize by skill level AND phenophase Name
+propSummarySkillPhe <- out %>% 
+  group_by(skillLevel, phenophaseName) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummarySkillPhe
+
+#summerize by phenophase Name only
+propSummaryPhe <- out %>% 
+  group_by(phenophaseName) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummaryPhe
+
+propSummaryType <- out %>% 
+  group_by(functionalType) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummaryType
+
+
+#summerize by skill level AND functional type
+propSummarySkillType <- out %>% 
+  group_by(skillLevel, functionalType) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummarySkillType
+
+#summerize by functional type
+propSummaryType <- out %>% 
+  group_by(functionalType) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummaryType
+
+```
+
+
+```{r printable tables}
+
+propSum.Table <- xtable(propSummary)
+print.xtable(propSum.Table, type="html", file="propSum.html")
+
+propSummarySkillPhe.Table <- xtable(propSummarySkillPhe)
+print.xtable(propSummarySkillPhe.Table, type="html", file="propSummarySkillPhe.html")
+
+propSummaryPhe.Table2 <- xtable(propSummaryPhe)
+print.xtable(propSummaryPhe.Table2, type="html", file="propSummaryPhe.html")
+
+propSummarySkillType.Table2 <- xtable(propSummarySkillType)
+print.xtable(propSummarySkillType.Table2, type="html", file="propSummarySkillType.html")
+
+propSummaryType.Table2 <- xtable(propSummaryType)
+print.xtable(propSummaryType.Table2, type="html", file="propSummaryType.html")
+
+```
+
+
+```{r anova}
+#does experience matter?
+
+skill <- lm(agree~skillLevel, data=out)
+anova(skill)
+
+type <- lm(agree~functionalType, data=out)
+anova(type)
+  #stongly influenced by ddb, test without
+out2 <- filter(out, !functionalType=='Deciduous broadleaf')
+omit_ddb <- lm(agree~functionalType, data=out2)
+anova(omit_ddb)
+
+
+t <- lm(agree~skillLevel+phenophaseName+skillLevel*phenophaseName, data=out)
+anova(t)
+
+plot(propagree ~ phenophaseName, data = propSummarySkillPhe)
+         
+
+```
+
+
+
+```{r ddb}
+
+ddb <- filter(df3, Species_Functional_Type=='Semi-deciduous broadleaf')
+
+ddb2<-ddb[duplicated (ddb[,colsToValidate]) | duplicated (ddb[,colsToValidate], fromLast=TRUE),]
+
+problemPerson <- ddb2 %>% 
+  filter(Intensity_Value=='-9999') %>%
+  group_by(ObservedBy_Person_ID) %>% 
+  summarise(records=length(Observation_Date), days=length(unique(Observation_Date)))
+
+problemPerson
+

@@ -1,0 +1,345 @@
+---
+title: "Phenology KPI"
+author: "Katie Jones"
+date: "Thursday, June 04, 2015"
+output: word_document
+---
+
+```{r libraries}
+
+library(plyr)
+library(dplyr)
+library(atbdLibrary)
+library(xtable)
+
+```
+
+
+
+```{r readNPNdata}
+#set working directory
+setwd("~/R/phenology/NPNdata_20150715")
+
+
+allData <- read.csv('observation_data.csv', na.strings = "",
+                    stringsAsFactors=F)
+
+```
+
+
+```{r manipulate dataset}
+
+#subset to to phenophase status='yes' (1), and reduce # of fields.
+df1 <- filter(allData, Phenophase_Status==1) %>%
+  select(Observation_Date, ObservedBy_Person_ID, Individual_ID,
+         USDA_PLANTS_Symbol, Species_Functional_Type, Phenophase_Name,
+         Phenophase_Status, Intensity_Value, Genus, Species) 
+
+
+#create scientificName field
+df1$scientificName <- "na"
+df1$scientificName <- paste(df1$Genus, df1$Species, sep=" ")
+
+
+#remove old dfs
+#rm(allData)
+
+```
+
+
+```{r, reduce nrows to just dupes}
+#Set temp column in order to identify records with duplicate values in specific fields
+colsToValidate <- c('Individual_ID', 'Observation_Date', 'Phenophase_Name')
+
+#select only those row that have duplicate values
+df2<-df1[duplicated (df1[,colsToValidate]) | duplicated (df1[,colsToValidate], fromLast=TRUE),]
+
+# remove duplicates resulting from multiple observations recorded by only one person on a given day
+df2 <- rem_dups(df=df2, cols=c(colsToValidate, 'ObservedBy_Person_ID'), qfColName = 'dupByPerson')
+
+# remove phenophases for which no intensity is reported
+df2 <- filter(df2, !Phenophase_Name=="Falling leaves", !Phenophase_Name=="Pollen release",
+              !Phenophase_Name=="Flower heads", !Phenophase_Name=='Flowers',
+              !Phenophase_Name=='Flowers or flower buds', !Phenophase_Name=='Open pollen cones', 
+               !Phenophase_Name=='Pollen cones', !Intensity_Value==-9999)
+
+
+df2$temp <- paste(df2$Observation_Date, df2$Individual_ID, df2$Phenophase_Name, 
+                   sep='_')
+
+#Set empty vectors to hold the values needed for the new dataframe
+dates <- vector()
+indIDs <- vector()
+pheNames <- vector()
+agrees <- vector()
+numObs <- vector()
+funcType <- vector()
+
+
+#Subset data by unique values of temp
+for (i in 1:length(unique(df2$temp))){
+  sub <- df2[which(df2$Observation_Date==strsplit(df2$temp[i],'_')[[1]][1] &
+                     df2$Individual_ID==strsplit(df2$temp[i],'_')[[1]][2] & 
+                     df2$Phenophase_Name==strsplit(df2$temp[i],'_')[[1]][3]),]
+  
+
+  #If there is more than one row in the subset, calculate agree (0=no, 1=yes)
+  if(nrow(sub)>1){
+    agree <- ifelse(length(unique(sub$Intensity_Value))==1, 1, 0)
+    numObs <- c(numObs,nrow(sub))
+    dates <- c(dates,sub$Observation_Date[1])
+    indIDs <- c(indIDs,sub$Individual_ID[1])
+    pheNames <- c(pheNames,sub$Phenophase_Name[1])
+    funcType <- c(funcType, sub$Species_Functional_Type [1])
+    agrees <- c(agrees,agree)
+  }
+}
+
+#Create output dataframe
+out <- data.frame(date=dates, individualID=indIDs, phenophaseName= pheNames,
+                  functionalType=funcType, agree=agrees,
+                  numberObservers=numObs)
+
+out <- rem_dups(out, names(out))
+
+```
+
+
+```{r summary}
+
+
+## overall concurance of phenophase intensity for = 0.8769671
+propConcur <- (sum(out$agree))/(nrow(out))
+propConcur
+
+
+#summerize by phenophase Name only
+propSummaryPhe <- out %>% 
+  group_by(phenophaseName) %>%
+  summarise(sumAgree=sum(agree), sumDist=sum(dist),  instances=length(agree), propAgree=sumAgree/instances, propDist=sumDist/instances)
+
+propSummaryPhe2
+
+#summerize by functional type
+propSummaryType <- out %>% 
+  group_by(functionalType) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummaryType
+
+#remove functional types with n<100
+propSummaryType <- filter(propSummaryType, !functionalType=="Graminoid")
+propSummaryType <- filter(propSummaryType, !functionalType=="Cactus")
+propSummaryType <- filter(propSummaryType, !functionalType=="Forb")
+
+out2 <- filter(out, !functionalType=="Graminoid", !functionalType=="Cactus", !functionalType=="Forb")
+
+propConcur2 <- (sum(out2$agree))/(nrow(out2))
+propConcur2
+
+propSummaryType2 <- out2 %>% 
+  group_by(functionalType) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummaryType2
+
+```
+
+
+```{r printable tables}
+
+propSumPhe.Table <- xtable(propSummaryPhe)
+print.xtable(propSumPhe.Table, type="html", file="noskill_propSumPhe.html")
+
+propSummaryType.Table <- xtable(propSummaryType)
+print.xtable(propSummaryType.Table, type="html", file="noskill_propSummaryType.html")
+
+propSummaryType2.Table <- xtable(propSummaryType2)
+print.xtable(propSummaryType2.Table, type="html", file="noskill_propSummaryType2.html")
+
+```
+
+
+
+```{r reassign intensity}
+
+df3 <- df2
+
+unique(df3$Intensity_Value)
+unique(df3$Phenophase_Name)
+
+df3$Intensity_Value <- as.character(df3$Intensity_Value)
+df3$Intensity_Value[df3$Intensity_Value == "Less than 3"] <- 1
+df3$Intensity_Value[df3$Intensity_Value == "3 to 10"] <- 2
+df3$Intensity_Value[df3$Intensity_Value == "11 to 100"] <- 3
+df3$Intensity_Value[df3$Intensity_Value == "101 to 1,000"] <- 4
+df3$Intensity_Value[df3$Intensity_Value == "1,001 to 10,000"] <- 5
+df3$Intensity_Value[df3$Intensity_Value == "More than 10,000"] <- 6
+df3$Intensity_Value[df3$Intensity_Value == "Less than 5%"] <- 7
+df3$Intensity_Value[df3$Intensity_Value == "5-24%"] <- 8
+df3$Intensity_Value[df3$Intensity_Value == "Less than 25%"] <- 8
+df3$Intensity_Value[df3$Intensity_Value == "25-49%"] <- 9
+df3$Intensity_Value[df3$Intensity_Value == "50-74%"] <- 10
+df3$Intensity_Value[df3$Intensity_Value == "75-94%"] <- 11
+df3$Intensity_Value[df3$Intensity_Value == "95% or more"] <- 12
+
+df3$Intensity_Value <- as.integer(df3$Intensity_Value)
+df3 <- filter(df3, !Intensity_Value=='NA')
+
+
+##max(Intensity_Value)-min(Intensity_Value)
+
+#Set empty vectors to hold the values needed for the new dataframe
+dates <- vector()
+indIDs <- vector()
+pheNames <- vector()
+agrees <- vector()
+numObs <- vector()
+funcType <- vector()
+minMaxDistance <- vector()
+
+
+#Subset data by unique values of temp
+for (i in 1:length(unique(df3$temp))){
+  sub <- df3[which(df3$Observation_Date==strsplit(df3$temp[i],'_')[[1]][1] &
+                     df3$Individual_ID==strsplit(df3$temp[i],'_')[[1]][2] & 
+                     df3$Phenophase_Name==strsplit(df3$temp[i],'_')[[1]][3]),]
+  
+
+  #If there is more than one row in the subset, calculate agree (0=no, 1=yes)
+  # calculate intensity value distance between disagreement
+  if(nrow(sub)>1){
+    agree <- ifelse(length(unique(sub$Intensity_Value))==1, 1, 0)
+    numObs <- c(numObs,nrow(sub))
+    diff <- max(sub$Intensity_Value)-min(sub$Intensity_Value)
+    dates <- c(dates,sub$Observation_Date[1])
+    indIDs <- c(indIDs,sub$Individual_ID[1])
+    pheNames <- c(pheNames,sub$Phenophase_Name[1])
+    funcType <- c(funcType, sub$Species_Functional_Type [1])
+    agrees <- c(agrees,agree)
+    minMaxDistance <- c(minMaxDistance, diff)
+  }
+}
+
+
+outDist <- data.frame(date=dates, individualID=indIDs, phenophaseName= pheNames,
+                  functionalType=funcType, agree=agrees,
+                  numberObservers=numObs, minMaxDistance=minMaxDistance)
+
+outDist <- rem_dups(outDist, names(outDist))
+outDist$dist <- 'na'
+
+outDist$dist <- ifelse((outDist$minMaxDistance==0 | outDist$minMaxDistance==1), 
+                       outDist$dist <- 1,outDist$dist <- 0)
+
+outDist$intensityType <- 'NA'
+outDist$intensityType[outDist$phenophaseName == "Breaking leaf buds"] <- 'count'
+outDist$intensityType[outDist$phenophaseName == "Emerging needles"] <- 'count'
+outDist$intensityType[outDist$phenophaseName == "Young leaves"] <- 'count'
+outDist$intensityType[outDist$phenophaseName == "Young needles"] <- 'count'
+outDist$intensityType[outDist$phenophaseName == "Colored leaves"] <- 'percentage'
+outDist$intensityType[outDist$phenophaseName == "Increasing leaf size"] <- 'percentage'
+outDist$intensityType[outDist$phenophaseName == "Leaves"] <- 'percentage'
+outDist$intensityType[outDist$phenophaseName == "Open flowers"] <- 'percentage'
+
+
+
+propConcurDist <- (sum(outDist$dist))/(nrow(outDist))
+propConcurDist
+ 
+propSummaryTypeDist <- outDist %>% 
+  group_by(functionalType) %>%
+  summarise(sumDist=sum(dist), instances=length(dist), propAgree=sumDist/instances)
+
+propSummaryTypeDist
+
+median(propSummaryTypeDist$propAgree)
+
+propSummaryPheDist <- outDist %>% 
+  group_by(phenophaseName) %>%
+  summarise(sumDist=sum(dist), instances=length(dist), propAgree=sumDist/instances)
+
+propSummaryPheDist
+
+median(propSummaryPheDist$propAgree)
+
+
+propSummaryIntensityType <- outDist %>% 
+  group_by(functionalType, intensityType) %>%
+  summarise(sumAgree=sum(agree), instances=length(agree), propAgree=sumAgree/instances)
+
+propSummaryIntensityType
+
+propSummaryType2 <- outDist %>% 
+  group_by(functionalType) %>%
+  summarise(sumAgree=sum(agree), sumDist=sum(dist),  instances=length(agree), propAgree=sumAgree/instances, propDist=sumDist/instances)
+
+propSummaryType2
+
+propSummaryType2 <- filter(propSummaryType2, !functionalType=="Cactus")
+propSummaryType2 <- filter(propSummaryType2, !functionalType=="Forb")
+
+propSummaryTypeInt <- outDist %>% 
+  group_by(functionalType, intensityType) %>%
+  summarise(sumAgree=sum(agree), sumDist=sum(dist),  instances=length(agree),
+            propAgree=sumAgree/instances, propDist=sumDist/instances)
+
+propSummaryTypeInt
+
+propSummaryTypeInt <- filter(propSummaryType2, !functionalType=="Cactus")
+propSummaryTypeInt <- filter(propSummaryType2, !functionalType=="Forb")
+
+propSummaryTypeInt
+
+#Print tables
+propSumPheDist.Table <- xtable(propSummaryPheDist)
+print.xtable(propSumPheDist.Table, type="html", file="noskill_propSumPheDist.html")
+
+propSummaryTypeDist.Table <- xtable(propSummaryTypeDist)
+print.xtable(propSummaryTypeDist.Table, type="html", file="noskill_propSummaryTypeDist.html")
+
+propSummaryIntensityType.Table <- xtable(propSummaryIntensityType)
+print.xtable(propSummaryIntensityType.Table, type="html", file="propSummaryIntensityType.html")
+
+```
+
+
+
+```{r anova}
+#does experience matter?
+
+skill <- lm(agree~skillLevel, data=out)
+anova(skill)
+
+type <- lm(agree~functionalType, data=out)
+anova(type)
+  #stongly influenced by ddb, test without
+out2 <- filter(out, !functionalType=='Deciduous broadleaf')
+omit_ddb <- lm(agree~functionalType, data=out2)
+anova(omit_ddb)
+
+
+t <- lm(agree~skillLevel+phenophaseName+skillLevel*phenophaseName, data=out)
+anova(t)
+
+plot(propagree ~ phenophaseName, data = propSummarySkillPhe)
+         
+
+```
+
+
+We looked across growth forms 
+median proportion of agreement assuming <100 found it be %73. We feel this is low given the attention 
+to training and experience of NEON crew, bump up to %85. NPN data are reported by observers with highly variable experience 
+Citizen Sci
+dumped a lot of data...
+
+
+categorize intensity values by percentage vs counts
+
+at the point of initial commissioning agreement must be within the growthform levels, additional assessment should demonstrated
+
+Counts = same bin (log scale)
+percentage = within one
+
+Can we rank? use agreement WITHIN bins as absolute fail threshold but 'quality' would be at a higher level. Ask Greg about grading.
